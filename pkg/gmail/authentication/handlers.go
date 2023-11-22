@@ -117,49 +117,82 @@ func getClient(ctx context.Context, config *oauth2.Config, token *oauth2.Token) 
 func listUnreadEmails(service *gmail.Service, userEmail string) (Emails, error) {
 	var emails Emails
 
-	user := userEmail
-	r, err := service.Users.Messages.List(user).Q("is:unread").MaxResults(5).Do()
+	r, err := service.Users.Messages.List(userEmail).Q("is:unread").MaxResults(5).Do()
 	if err != nil {
+		log.Printf("Error listing unread emails: %v", err)
 		return emails, err
 	}
 
-	fmt.Println("Mensagens não lidas:")
-	if len(r.Messages) == 0 {
-		fmt.Println("Nenhuma mensagem não lida encontrada.")
-		return emails, nil
-	}
-
 	for _, l := range r.Messages {
-		msg, err := service.Users.Messages.Get(user, l.Id).Format("full").Do()
+		msg, err := getMessageContent(service, userEmail, l.Id)
 		if err != nil {
-			continue // lidar com o erro
+			log.Printf("Error getting message content: %v", err)
+			continue
 		}
 
-		var emailContent string
-		if msg.Payload.MimeType == "text/plain" {
-			data, _ := base64.URLEncoding.DecodeString(msg.Payload.Body.Data)
-			emailContent = string(data)
-		} else if msg.Payload.MimeType == "text/html" {
-			data, _ := base64.URLEncoding.DecodeString(msg.Payload.Body.Data)
-			emailContent = htmlToText(string(data))
-		} else {
-			for _, part := range msg.Payload.Parts {
-				if part.MimeType == "text/plain" || part.MimeType == "text/html" {
-					data, _ := base64.URLEncoding.DecodeString(part.Body.Data)
-					if part.MimeType == "text/html" {
-						emailContent = htmlToText(string(data))
-					} else {
-						emailContent = string(data)
-					}
-					break
-				}
-			}
-		}
-
-		emails.Emails = append(emails.Emails, Email{Id: msg.Id, Raw: emailContent})
+		emails.Emails = append(emails.Emails, Email{Id: msg.Id, Raw: msg.Raw})
 	}
 
 	return emails, nil
+}
+
+// extractEmailContent extrai o conteúdo de um e-mail a partir de um objeto *gmail.Message.
+// Ele suporta tanto texto plano quanto HTML, convertendo HTML para texto simples.
+func extractEmailContent(msg *gmail.Message) (string, error) {
+	if msg.Payload == nil {
+		return "", nil // Sem conteúdo para processar
+	}
+
+	// Verifica se o MIME Type é text/plain ou text/html
+	switch msg.Payload.MimeType {
+	case "text/plain":
+		data, err := base64.URLEncoding.DecodeString(msg.Payload.Body.Data)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+
+	case "text/html":
+		data, err := base64.URLEncoding.DecodeString(msg.Payload.Body.Data)
+		if err != nil {
+			return "", err
+		}
+		return htmlToText(string(data)), nil
+	}
+
+	// Se o MIME Type não é text/plain ou text/html, procura nos parts
+	for _, part := range msg.Payload.Parts {
+		switch part.MimeType {
+		case "text/plain", "text/html":
+			data, err := base64.URLEncoding.DecodeString(part.Body.Data)
+			if err != nil {
+				return "", err
+			}
+			if part.MimeType == "text/html" {
+				return htmlToText(string(data)), nil
+			}
+			return string(data), nil
+		}
+	}
+
+	return "", nil // Sem conteúdo reconhecível
+}
+
+func getMessageContent(service *gmail.Service, userEmail, messageId string) (Email, error) {
+	var email Email
+	msg, err := service.Users.Messages.Get(userEmail, messageId).Format("full").Do()
+	if err != nil {
+		return email, err
+	}
+
+	email.Id = msg.Id
+	emailContent, err := extractEmailContent(msg)
+	if err != nil {
+		return email, err
+	}
+
+	email.Raw = emailContent
+	return email, nil
 }
 
 func AuthHandler(w http.ResponseWriter, r *http.Request) {
