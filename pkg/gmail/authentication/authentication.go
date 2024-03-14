@@ -6,8 +6,7 @@ import (
 )
 
 func AuthServer() {
-
-	http.HandleFunc("/callback", CallbackHandler)
 	http.HandleFunc("/auth", AuthHandler)
+	http.HandleFunc("/emails", EmailsHandler)
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
